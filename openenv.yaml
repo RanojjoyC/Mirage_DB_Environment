@@ -1,0 +1,121 @@
+spec_version: 1
+name: Mirage_RL
+type: space
+runtime: fastapi
+app: server.app:app
+port: 8000
+
+description: >
+  Mirage_RL is a reinforcement-learning environment for database query
+  join-order optimisation. An AI agent must decide which tables to join,
+  in which order, and using which join strategy (hash / nested-loop /
+  merge-sort) to minimise the total estimated join cost.
+  Three difficulty tiers are available: Easy (2 tables), Medium (3 tables),
+  and Hard (5 tables with mixed index availability and high cardinality).
+
+author: meta-hackathon-team
+
+tasks:
+  - id: easy
+    name: "Two-Table Join Optimizer"
+    difficulty: easy
+    description: >
+      Optimise the join order for 2 tables (Users, Orders).
+      Both tables have indexes. Score in [0.0, 1.0].
+    num_tables: 2
+    max_steps: 2
+
+  - id: medium
+    name: "Three-Table Join Optimizer"
+    difficulty: medium
+    description: >
+      Optimise the join order for 3 tables (Products, Orders, Customers).
+      Selectivities and index availability vary per table. Score in [0.0, 1.0].
+    num_tables: 3
+    max_steps: 3
+
+  - id: hard
+    name: "Five-Table Join Optimizer"
+    difficulty: hard
+    description: >
+      Optimise the join order for 5 tables (Events, Sessions, Users, Products,
+      Transactions) in a complex analytical schema with mixed indexes and high
+      cardinality. Score in [0.0, 1.0].
+    num_tables: 5
+    max_steps: 5
+
+reward_range: [0.0, 1.0]
+
+action_schema:
+  type: object
+  required: [next_table, join_type, use_index]
+  properties:
+    next_table:
+      type: integer
+      minimum: 0
+      description: >
+        Index of the next table to add to the join tree.
+        Must be selected from the current remaining_tables list.
+    join_type:
+      type: integer
+      enum: [0, 1, 2]
+      description: >
+        Join algorithm to use.
+        0 = hash join (1.0× cost multiplier),
+        1 = nested-loop join (2.0× — most expensive),
+        2 = merge-sort join (0.8× — cheapest).
+    use_index:
+      type: integer
+      enum: [0, 1]
+      description: >
+        Whether to use an index scan on this table.
+        1 = use index (halves base row count when index is available),
+        0 = full table scan.
+
+observation_schema:
+  type: object
+  properties:
+    tables:
+      type: array
+      items: {type: string}
+      description: "Ordered list of table names for the current task."
+    table_rows:
+      type: array
+      items: {type: integer}
+      description: "Estimated row count for each table."
+    selectivities:
+      type: array
+      items: {type: number}
+      description: >
+        Join selectivity for each table — the fraction of rows that pass
+        the join predicate (lower means fewer output rows).
+    has_index:
+      type: array
+      items: {type: integer}
+      description: >
+        Index availability per table: 1 = index present, 0 = no index.
+    chosen_order:
+      type: array
+      items: {type: integer}
+      description: "Indices of tables already added to the join tree, in order."
+    remaining_tables:
+      type: array
+      items: {type: integer}
+      description: "Indices of tables not yet joined (valid choices for next_table)."
+    step_number:
+      type: integer
+      description: "Zero-based step counter within the current episode."
+    current_cost:
+      type: number
+      description: "Accumulated join cost across all steps so far."
+    done:
+      type: boolean
+      description: "True when all tables have been joined (episode complete)."
+    reward:
+      type: number
+      minimum: 0.0
+      maximum: 1.0
+      description: >
+        Normalised reward for this step in [0.0, 1.0].
+        Per-step: quality of join choice relative to worst/best for that table.
+        Final step: overall grader score for the full join order.

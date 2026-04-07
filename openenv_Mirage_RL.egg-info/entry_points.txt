@@ -1,0 +1,2 @@
+[console_scripts]
+server = Mirage_RL.server.app:main

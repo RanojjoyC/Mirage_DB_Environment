@@ -1,0 +1,43 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+#
+# This source code is licensed under the BSD-style license found in the
+# LICENSE file in the root directory of this source tree.
+
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openenv-Mirage_RL"
+version = "0.1.0"
+description = "Mirage Rl environment for OpenEnv"
+requires-python = ">=3.10"
+dependencies = [
+    # Core OpenEnv runtime (provides FastAPI server + HTTP client types)
+    "openenv-core[core]>=0.2.2",
+    # OpenAI client — required for inference.py baseline script
+    "openai>=1.0.0",
+    # RL agent dependencies (kept for local training experiments)
+    "torch>=2.0.0",
+    "numpy>=1.19.0",
+    # UI
+    "streamlit>=1.30.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.scripts]
+# Server entry point
+server = "Mirage_RL.server.app:main"
+# Baseline inference script entry point
+baseline = "inference:main"
+
+[tool.setuptools]
+include-package-data = true
+packages = ["Mirage_RL", "Mirage_RL.server", "Mirage_RL.training"]
+package-dir = { "Mirage_RL" = ".", "Mirage_RL.server" = "server", "Mirage_RL.training" = "training" }
