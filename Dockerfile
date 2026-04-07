@@ -43,15 +43,21 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM ${BASE_IMAGE}
 
-WORKDIR /app
+# Add non-root user required by Hugging Face Spaces
+RUN useradd -m -u 1000 user
+USER user
+ENV HOME=/home/user \
+    PATH=/home/user/.local/bin:$PATH
 
-COPY --from=builder /app/env/.venv /app/.venv
-COPY --from=builder /app/env       /app/env
+WORKDIR $HOME/app
 
-ENV PATH="/app/.venv/bin:$PATH"
-ENV PYTHONPATH="/app/env:$PYTHONPATH"
+COPY --from=builder --chown=user:user /app/env/.venv $HOME/app/.venv
+COPY --from=builder --chown=user:user /app/env       $HOME/app/env
+
+ENV PATH="$HOME/app/.venv/bin:$PATH"
+ENV PYTHONPATH="$HOME/app/env:$PYTHONPATH"
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-CMD ["sh", "-c", "cd /app/env && uvicorn server.app:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "cd $HOME/app/env && uvicorn server.app:app --host 0.0.0.0 --port 8000"]

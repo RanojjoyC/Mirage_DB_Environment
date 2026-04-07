@@ -236,9 +236,9 @@ Scores produced by running `inference.py` with `Qwen/Qwen2.5-72B-Instruct` via H
 
 | Task | Difficulty | Baseline Score |
 |---|---|---|
-| OLTP 3-table | Easy | ~0.82 |
-| OLAP 5-table | Medium | ~0.68 |
-| Complex OLAP 7-table | Hard | ~0.51 |
+| OLTP 3-table | Easy | ~1.00 |
+| OLAP 5-table | Medium | ~0.93 |
+| Complex OLAP 7-table | Hard | ~0.11 |
 
 > Scores are approximate and vary by episode (random scenario sampling). For reproducible results, pass `seed=42` to `reset()`.
 

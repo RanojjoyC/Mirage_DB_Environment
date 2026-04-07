@@ -14,6 +14,7 @@ Core design:
 
 from __future__ import annotations
 
+import math
 import random
 from typing import List, Optional
 
@@ -24,14 +25,14 @@ try:
     from Mirage_RL.server.tasks import (
         TaskConfig, TableSpec, Scenario, TASKS,
         apply_estimation_noise, compute_cost_bounds,
-        compute_step_cost_bounds, grade,
+        compute_step_cost_bounds, compute_order_quality, grade,
     )
 except ImportError:
     from models import QueryAction, QueryObservation, QueryState          # type: ignore
     from server.tasks import (                                             # type: ignore
         TaskConfig, TableSpec, Scenario, TASKS,
         apply_estimation_noise, compute_cost_bounds,
-        compute_step_cost_bounds, grade,
+        compute_step_cost_bounds, compute_order_quality, grade,
     )
 
 # Join-type cost multipliers (mirrors the agent's cost model exactly)
@@ -61,6 +62,12 @@ class QueryEnv(Environment):
         self._true_rows:  List[int] = []
         self._est_rows:   List[int] = []
         self._cost_bounds: tuple[float, float] = (1.0, 0.0)  # (worst, best)
+
+        # Intermediate result size tracking:
+        #   true  — used internally for cost accuracy
+        #   est   — shown to agent (product of est_rows × sel for joined tables)
+        self._true_running_size: float = 1.0
+        self._est_running_size:  float = 1.0
 
         self._state  = QueryState()
         self._step_count: int  = 0
@@ -109,6 +116,8 @@ class QueryEnv(Environment):
         self._state.scenario_name    = self._scenario.name
         self._step_count = 0
         self._done       = False
+        self._true_running_size = 1.0
+        self._est_running_size  = 1.0
 
         return self._make_obs(reward=0.0)
 
@@ -135,19 +144,29 @@ class QueryEnv(Environment):
         self._state.current_cost += added_cost
 
         # ── Normalised per-step reward ────────────────────────────────────────
+        # MUST evaluate bounds using the running_size BEFORE it gets multiplied
         table_spec                = self._scenario.tables[idx]
-        worst_step, best_step     = compute_step_cost_bounds(table_spec)
+        worst_step, best_step     = compute_step_cost_bounds(table_spec, self._true_running_size)
         if worst_step == best_step:
             step_reward = 1.0
         else:
             step_reward = (worst_step - added_cost) / (worst_step - best_step)
             step_reward = float(max(0.0, min(1.0, step_reward)))
 
+        # Update intermediate size trackers for the NEXT step
+        sel = self._scenario.tables[idx].selectivity
+        self._true_running_size *= self._true_rows[idx] * sel
+        self._est_running_size  *= self._est_rows[idx]  * sel
+
         # ── Episode complete? ─────────────────────────────────────────────────
         if not self._state.remaining_tables:
             self._done               = True
             self._state.final_cost   = self._state.current_cost
-            final_score = grade(self._scenario.tables, self._state.final_cost)
+            final_score = grade(
+                self._scenario.tables,
+                self._state.final_cost,
+                chosen_order=list(self._state.chosen_order),
+            )
             return self._make_obs(reward=final_score)
 
         return self._make_obs(reward=step_reward)
@@ -162,8 +181,9 @@ class QueryEnv(Environment):
 
     def _true_step_cost(self, table_idx: int, action: QueryAction) -> float:
         """
-        Compute join cost using TRUE row count (not the noisy estimate).
-        This reflects actual query execution cost vs planner estimates.
+        Compute join cost using TRUE row count (not the noisy estimate), 
+        adding an intermediate size penalty for cascading costs.
+        This strongly encourages joining highly selective, small tables early.
         """
         true_rows = self._true_rows[table_idx]
         sel       = self._scenario.tables[table_idx].selectivity
@@ -171,20 +191,24 @@ class QueryEnv(Environment):
 
         base_rows = true_rows * 0.5 if (action.use_index and has_idx) else true_rows
         mult      = _JOIN_MULTIPLIER.get(action.join_type, 1.0)
-        return base_rows * sel * mult
+        
+        # Additive penalty: the size of the accumulated running result
+        penalty   = max(0.0, self._true_running_size - 1.0)
+        return (base_rows * sel * mult) + penalty
 
     def _make_obs(self, reward: float) -> QueryObservation:
-        """Build observation — agent sees ESTIMATED rows, not true rows."""
+        """Build observation — agent sees ESTIMATED rows and intermediate size."""
         return QueryObservation(
-            done             = self._done,
-            reward           = round(reward, 6),
-            tables           = list(t.name for t in self._scenario.tables),
-            table_rows       = list(self._est_rows),       # noisy estimates
-            selectivities    = [t.selectivity   for t in self._scenario.tables],
-            has_index        = [t.has_index      for t in self._scenario.tables],
-            chosen_order     = list(self._state.chosen_order),
-            remaining_tables = list(self._state.remaining_tables),
-            step_number      = self._step_count,
-            current_cost     = round(self._state.current_cost, 6),
-            query_context    = self._scenario.query_context,
+            done              = self._done,
+            reward            = round(reward, 6),
+            tables            = list(t.name for t in self._scenario.tables),
+            table_rows        = list(self._est_rows),
+            selectivities     = [t.selectivity   for t in self._scenario.tables],
+            has_index         = [t.has_index      for t in self._scenario.tables],
+            chosen_order      = list(self._state.chosen_order),
+            remaining_tables  = list(self._state.remaining_tables),
+            step_number       = self._step_count,
+            current_cost      = round(self._state.current_cost, 6),
+            query_context     = self._scenario.query_context,
+            intermediate_size = round(self._est_running_size, 2),
         )

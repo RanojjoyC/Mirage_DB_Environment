@@ -16,17 +16,18 @@ class QueryClient(EnvClient[QueryAction, QueryObservation, QueryState]):
         obs = payload.get("observation", {})
 
         observation = QueryObservation(
-            done             = payload.get("done", False),
-            reward           = payload.get("reward", 0.0),
-            tables           = obs.get("tables", []),
-            table_rows       = obs.get("table_rows", []),
-            selectivities    = obs.get("selectivities", []),
-            has_index        = obs.get("has_index", []),
-            chosen_order     = obs.get("chosen_order", []),
-            remaining_tables = obs.get("remaining_tables", []),
-            step_number      = obs.get("step_number", 0),
-            current_cost     = obs.get("current_cost", 0.0),
-            query_context    = obs.get("query_context", ""),
+            done              = payload.get("done", False),
+            reward            = payload.get("reward", 0.0),
+            tables            = obs.get("tables", []),
+            table_rows        = obs.get("table_rows", []),
+            selectivities     = obs.get("selectivities", []),
+            has_index         = obs.get("has_index", []),
+            chosen_order      = obs.get("chosen_order", []),
+            remaining_tables  = obs.get("remaining_tables", []),
+            step_number       = obs.get("step_number", 0),
+            current_cost      = obs.get("current_cost", 0.0),
+            query_context     = obs.get("query_context", ""),
+            intermediate_size = obs.get("intermediate_size", 1.0),
         )
 
         return StepResult(

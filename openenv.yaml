@@ -10,39 +10,42 @@ description: >
   join-order optimisation. An AI agent must decide which tables to join,
   in which order, and using which join strategy (hash / nested-loop /
   merge-sort) to minimise the total estimated join cost.
-  Three difficulty tiers are available: Easy (2 tables), Medium (3 tables),
-  and Hard (5 tables with mixed index availability and high cardinality).
+  Three difficulty tiers are available: Easy (3 tables), Medium (5 tables),
+  and Hard (7 tables with mixed index availability and high cardinality noise).
 
 author: meta-hackathon-team
 
 tasks:
   - id: easy
-    name: "Two-Table Join Optimizer"
+    name: "OLTP Join Optimizer — 3-Table Queries"
     difficulty: easy
     description: >
-      Optimise the join order for 2 tables (Users, Orders).
-      Both tables have indexes. Score in [0.0, 1.0].
-    num_tables: 2
-    max_steps: 2
-
-  - id: medium
-    name: "Three-Table Join Optimizer"
-    difficulty: medium
-    description: >
-      Optimise the join order for 3 tables (Products, Orders, Customers).
-      Selectivities and index availability vary per table. Score in [0.0, 1.0].
+      Optimise join order for 3-table production OLTP queries (e-commerce
+      and SaaS schemas). All tables have covering indexes. Statistics are
+      accurate (noise sigma <= 0.06). Score in [0.0, 1.0].
     num_tables: 3
     max_steps: 3
 
-  - id: hard
-    name: "Five-Table Join Optimizer"
-    difficulty: hard
+  - id: medium
+    name: "OLAP Join Optimizer — 5-Table Queries with Estimation Noise"
+    difficulty: medium
     description: >
-      Optimise the join order for 5 tables (Events, Sessions, Users, Products,
-      Transactions) in a complex analytical schema with mixed indexes and high
-      cardinality. Score in [0.0, 1.0].
+      Optimise join order for 5-table analytical queries across e-commerce,
+      marketing, and financial schemas. Some tables lack indexes. Cardinality
+      estimates contain realistic noise (sigma 0.05-0.25). Score in [0.0, 1.0].
     num_tables: 5
     max_steps: 5
+
+  - id: hard
+    name: "Complex OLAP Join Optimizer — 7-Table Queries, High Noise"
+    difficulty: hard
+    description: >
+      Optimise join order for 7-table enterprise analytical queries including
+      billion-row event tables, missing indexes, and high cardinality estimation
+      noise (sigma up to 0.60). 7-factorial = 5040 possible orderings.
+      Score in [0.0, 1.0].
+    num_tables: 7
+    max_steps: 7
 
 reward_range: [0.0, 1.0]
 
@@ -108,6 +111,16 @@ observation_schema:
     current_cost:
       type: number
       description: "Accumulated join cost across all steps so far."
+    intermediate_size:
+      type: number
+      minimum: 1.0
+      description: >
+        Estimated size of the intermediate result accumulated across all joined
+        tables so far. Computed as the product of (est_rows x selectivity) for
+        each joined table using the agent-visible estimated cardinalities.
+        Joining large-output tables early causes this to grow rapidly, compounding
+        all subsequent join costs. The agent should prefer joining small-output
+        (selective) tables first to keep this value small.
     done:
       type: boolean
       description: "True when all tables have been joined (episode complete)."
@@ -118,4 +131,4 @@ observation_schema:
       description: >
         Normalised reward for this step in [0.0, 1.0].
         Per-step: quality of join choice relative to worst/best for that table.
-        Final step: overall grader score for the full join order.
+        Final step: combined score = 60% method quality + 40% order quality.

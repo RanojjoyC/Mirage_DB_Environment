@@ -114,20 +114,30 @@ def format_action(action: QueryAction, tables: list) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = textwrap.dedent("""
-    You are an expert database query optimizer.
-    Your goal is to minimise total join cost by choosing the join order and strategy.
+    You are a database query optimizer. Your job is to build an efficient join plan
+    by deciding, one table at a time, which table to join next and how.
 
-    COST MODEL:
-      step_cost  =  base_rows  x  selectivity  x  join_multiplier
-      base_rows  =  rows x 0.5  if use_index=1 AND table has an index,  else rows
-      join_type 0 (hash):         multiplier = 1.0
-      join_type 1 (nested_loop):  multiplier = 2.0   -- MOST expensive, avoid
-      join_type 2 (merge_sort):   multiplier = 0.8   -- CHEAPEST, prefer this
+    You will see table statistics including estimated row counts, join selectivities,
+    and index availability for each table. These estimates may not be exact — real
+    database planners always operate on statistics that can differ from ground truth.
 
-    STRATEGY: join the table with the lowest effective cost first.
-    Always prefer merge_sort (join_type=2) and use the index (use_index=1) when available.
+    TWO things determine your score:
 
-    Respond with ONLY a JSON object — no markdown, no explanation:
+    1. JOIN METHOD quality (60% of score): which algorithm and index you choose.
+       Different join algorithms have very different cost profiles.
+       Using an index when one is available significantly reduces scan cost.
+
+    2. JOIN ORDER quality (40% of score): which table you pick at each step.
+       Joining a table with a large output early causes the intermediate result
+       to explode — every subsequent join must then probe against that larger set.
+       To minimise total cost: prefer joining tables with the smallest
+       (estimated_rows × selectivity) output first, saving large tables for later.
+
+    The observation shows 'intermediate_size': the estimated size of the accumulated
+    intermediate result from all joins so far. Keep this number small by joining
+    highly selective, small-output tables early in the sequence.
+
+    Respond with ONLY a valid JSON object — no markdown, no explanation:
     {"next_table": <int>, "join_type": <0|1|2>, "use_index": <0|1>}
 """).strip()
 
@@ -135,49 +145,56 @@ SYSTEM_PROMPT = textwrap.dedent("""
 def build_user_prompt(obs, task_config, step: int) -> str:
     lines = []
     for i in range(len(obs.tables)):
-        status   = "JOINED" if i in obs.chosen_order else "pending"
+        status   = "JOINED" if i in obs.chosen_order else "available"
         idx_info = "indexed" if obs.has_index[i] else "no_index"
-        eff_cost = obs.table_rows[i] * (0.5 if obs.has_index[i] else 1) * obs.selectivities[i] * 0.8
+        est_out  = obs.table_rows[i] * obs.selectivities[i]   # estimated output rows
         lines.append(
-            f"  [{i}] {obs.tables[i]:15s} rows={obs.table_rows[i]:>8,} "
-            f"sel={obs.selectivities[i]:.3f} {idx_info:10s} best_cost~{eff_cost:>9.2f} [{status}]"
+            f"  [{i}] {obs.tables[i]:15s}  est_rows={obs.table_rows[i]:>12,}  "
+            f"sel={obs.selectivities[i]:.3f}  est_output={est_out:>12,.0f}  "
+            f"{idx_info:10s}  [{status}]"
         )
 
     remaining_display = [f"[{i}]{obs.tables[i]}" for i in obs.remaining_tables]
     joined_display    = [obs.tables[i] for i in obs.chosen_order]
 
     return textwrap.dedent(f"""
-        Step {step} — Task: {task_config.name} ({task_config.difficulty.upper()})
+        Step {step} of episode  |  Task: {task_config.name}  [{task_config.difficulty.upper()}]
 
-        Query being optimised:
+        Query:
         {obs.query_context}
 
-        Tables:
+        Table statistics (est_rows = planner estimates, may differ from true cardinality):
         {chr(10).join(lines)}
 
-        Already joined : {joined_display if joined_display else "(none)"}
-        Remaining      : {remaining_display}
-        Accumulated cost so far: {obs.current_cost:.4f}
+        Join progress:
+          Already joined       : {joined_display if joined_display else "(none — first step)"}
+          Remaining            : {remaining_display}
+          Accumulated cost     : {obs.current_cost:.2f}
+          Intermediate size    : {obs.intermediate_size:,.0f}  ← keep this small; explodes if you join large-output tables early
 
-        Note: table_rows are ESTIMATED (planner statistics with noise).
-        The actual execution cost is computed on true cardinalities.
-        Prefer small, highly-selective tables first.
-
-        Choose next_table from: {obs.remaining_tables}
+        Decide the next join. Choose next_table from {obs.remaining_tables}.
+        Reason about join ORDER (intermediate blowup) AND join METHOD (algorithm + index).
+        Output the JSON.
     """).strip()
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LLM call + greedy fallback
 # ─────────────────────────────────────────────────────────────────────────────
 
-def greedy_fallback(obs) -> dict:
-    """Deterministic fallback: pick lowest-effective-cost remaining table."""
-    best = min(
-        obs.remaining_tables,
-        key=lambda i: obs.table_rows[i] * (0.5 if obs.has_index[i] else 1) * obs.selectivities[i] * 0.8,
-    )
-    return {"next_table": best, "join_type": 2, "use_index": 1}
+import random as _random
+
+def random_fallback(obs) -> dict:
+    """
+    Random fallback when LLM fails — picks a uniformly random remaining table,
+    random join type, random index usage. This ensures LLM failures are penalised
+    rather than silently rescued by an optimal greedy choice.
+    """
+    table  = _random.choice(obs.remaining_tables)
+    j_type = _random.randint(0, 2)
+    use_ix = _random.randint(0, 1)
+    return {"next_table": table, "join_type": j_type, "use_index": use_ix}
 
 
 def get_action(client: OpenAI, obs, task_config, step: int) -> tuple[dict, Optional[str]]:
@@ -227,8 +244,8 @@ def get_action(client: OpenAI, obs, task_config, step: int) -> tuple[dict, Optio
             if attempt < MAX_RETRIES - 1:
                 time.sleep(RETRY_DELAY)
 
-    # All retries exhausted → greedy deterministic fallback
-    return greedy_fallback(obs), f"llm_failed:{last_error}"
+    # All retries exhausted → random fallback (penalises LLM failures)
+    return random_fallback(obs), f"llm_failed:{last_error}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -281,8 +298,8 @@ def run_task(task_id: str, client: OpenAI) -> float:
             if done:
                 break
 
-        # Final grader score — normalised in [0.0, 1.0]
-        score   = grade(env._scenario.tables, env.state.final_cost)
+        # Final grader score — the environment returns the episode score natively on done
+        score   = rewards[-1] if rewards else 0.0
         score   = min(max(score, 0.0), 1.0)
         success = score >= SUCCESS_SCORE_THRESHOLD
 

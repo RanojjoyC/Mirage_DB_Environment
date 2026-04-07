@@ -21,6 +21,15 @@ class QueryObservation(Observation):
     remaining_tables: List[int]    # table indices not yet joined (valid choices for next_table)
     step_number:      int          # 0-based step counter
     current_cost:     float        # accumulated join cost so far (based on true cardinalities)
+    intermediate_size: float = Field(
+        default=1.0,
+        description=(
+            "Estimated size of the intermediate result accumulated so far. "
+            "Computed as the product of (est_rows × selectivity) for each joined table. "
+            "Joining large-output tables early causes this to explode, compounding all "
+            "subsequent join costs. Keep this small by joining selective tables first."
+        ),
+    )
 
     # Enterprise context
     query_context:    str = Field(default="", description="SQL-like description of the query being optimized")
