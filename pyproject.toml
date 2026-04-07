@@ -15,7 +15,7 @@ description = "Mirage Rl environment for OpenEnv"
 requires-python = ">=3.10"
 dependencies = [
     # Core OpenEnv runtime (provides FastAPI server + HTTP client types)
-    "openenv-core[core]>=0.2.2",
+    "openenv[core]>=0.2.2",
     # OpenAI client — required for inference.py baseline script
     "openai>=1.0.0",
     # RL agent dependencies (kept for local training experiments)

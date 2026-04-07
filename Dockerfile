@@ -5,7 +5,7 @@
 ARG BASE_IMAGE=ghcr.io/meta-pytorch/openenv-base:latest
 FROM ${BASE_IMAGE} AS builder
 
-WORKDIR /app
+WORKDIR /home/user/app
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends git && \
@@ -15,8 +15,8 @@ ARG BUILD_MODE=in-repo
 ARG ENV_NAME=Mirage_RL
 
 # Copy full project context
-COPY . /app/env
-WORKDIR /app/env
+COPY . /home/user/app/env
+WORKDIR /home/user/app/env
 
 # Ensure uv is available
 RUN if ! command -v uv >/dev/null 2>&1; then \
@@ -27,18 +27,10 @@ RUN if ! command -v uv >/dev/null 2>&1; then \
 
 # Install dependencies
 RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ -f uv.lock ]; then \
-        uv sync --frozen --no-install-project --no-editable; \
-    else \
-        uv sync --no-install-project --no-editable; \
-    fi
+    uv sync --no-install-project --no-editable
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ -f uv.lock ]; then \
-        uv sync --frozen --no-editable; \
-    else \
-        uv sync --no-editable; \
-    fi
+    uv sync --no-editable
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM ${BASE_IMAGE}
@@ -51,8 +43,8 @@ ENV HOME=/home/user \
 
 WORKDIR $HOME/app
 
-COPY --from=builder --chown=user:user /app/env/.venv $HOME/app/.venv
-COPY --from=builder --chown=user:user /app/env       $HOME/app/env
+COPY --from=builder --chown=user:user /home/user/app/env/.venv $HOME/app/.venv
+COPY --from=builder --chown=user:user /home/user/app/env       $HOME/app/env
 
 ENV PATH="$HOME/app/.venv/bin:$PATH"
 ENV PYTHONPATH="$HOME/app/env:$PYTHONPATH"
